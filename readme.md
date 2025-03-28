@@ -87,7 +87,7 @@ Key elements include:
 
 This implementation is inspired by:
 
-1. Ozawa, M., Biroli, G. (2020). Scaling Description of Dynamical Heterogeneity and Avalanches of Relaxation in Glass-Forming Liquids. *Physical Review Letters*, 124(2), 025501. https://doi.org/10.1103/PhysRevLett.124.025501
+1. Ozawa, M., Biroli, G. (2023). Elasticity, Facilitation, and Dynamic Heterogeneity in Glass-Forming Liquids. *Physical Review Letters*, 130, 138201. https://link.aps.org/doi/10.1103/PhysRevLett.130.138201
 
 2. Tahaei, A., Biroli, G., Ozawa, M., Popovic, M., Wyart, M. (2023). Scaling Description of Dynamical Heterogeneity and Avalanches of Relaxation in Glass-Forming Liquids. *Physical Review X*, 13, 031034. https://doi.org/10.1103/PhysRevX.13.031034
 
