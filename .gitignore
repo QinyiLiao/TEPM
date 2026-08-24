@@ -1,0 +1,21 @@
+# Build artifacts
+*.o
+tensorial_model
+
+# Simulation output
+eshelby_kernel_*.dat
+config_*.dat
+stats_*.dat
+dynamics_*.dat
+px_*.dat
+aval_*.dat
+avalblocks_*.dat
+xdist_*.dat
+egap_*.dat
+timing_*.dat
+
+# Editor
+.vscode/
+__pycache__/
+*~
+core
