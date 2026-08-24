@@ -128,6 +128,10 @@ Some equations as printed require care. This code makes each choice explicit rat
 
 2. Tahaei, A., Biroli, G., Ozawa, M., Popovic, M., Wyart, M. (2023). Scaling Description of Dynamical Heterogeneity and Avalanches of Relaxation in Glass-Forming Liquids. *Physical Review X*, 13, 031034. https://doi.org/10.1103/PhysRevX.13.031034
 
+## Credits
+
+Written with Claude Opus 5 and GPT 5.6 Sol, directed by Qinyi Liao.
+
 ## License
 
 See `LICENSE`.
