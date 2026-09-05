@@ -14,13 +14,15 @@ namespace {
 constexpr std::array<char, 8> KERNEL_CACHE_MAGIC = {'T', 'E', 'P', 'M', 'K', 'R', 'N', 'L'};
 constexpr std::uint32_t KERNEL_CACHE_FORMAT_VERSION = 1;
 constexpr std::uint32_t PAPER_KERNEL_FORMULA_VERSION = 1;
-constexpr std::uint32_t PROJECTOR_KERNEL_FORMULA_VERSION = 1;
+constexpr std::uint32_t PROJECTOR_EVEN_KERNEL_FORMULA_VERSION = 1;
+constexpr std::uint32_t PROJECTOR_ODD_KERNEL_FORMULA_VERSION = 2;
 constexpr std::uint64_t FNV_OFFSET_BASIS = 14695981039346656037ULL;
 constexpr std::uint64_t FNV_PRIME = 1099511628211ULL;
 
-std::uint32_t kernelFormulaVersion(bool projector_kernel) {
-    return projector_kernel ? PROJECTOR_KERNEL_FORMULA_VERSION
-                            : PAPER_KERNEL_FORMULA_VERSION;
+std::uint32_t kernelFormulaVersion(bool projector_kernel, int L) {
+    if (!projector_kernel) return PAPER_KERNEL_FORMULA_VERSION;
+    return (L % 2 == 0) ? PROJECTOR_EVEN_KERNEL_FORMULA_VERSION
+                        : PROJECTOR_ODD_KERNEL_FORMULA_VERSION;
 }
 
 std::uint64_t updateChecksum(std::uint64_t checksum, const void* data, std::size_t size) {
@@ -160,7 +162,7 @@ bool TensorialModel::saveEshelbyKernels(const std::string& filename) const {
     }
 
     const std::uint32_t cache_version = KERNEL_CACHE_FORMAT_VERSION;
-    const std::uint32_t formula_version = kernelFormulaVersion(projector_kernel);
+    const std::uint32_t formula_version = kernelFormulaVersion(projector_kernel, L);
     const std::uint32_t stored_L = static_cast<std::uint32_t>(L);
     const std::uint32_t stored_mode = projector_kernel ? 1U : 0U;
 
@@ -246,7 +248,7 @@ bool TensorialModel::loadEshelbyKernels(const std::string& filename) {
     const std::uint32_t expected_mode = projector_kernel ? 1U : 0U;
     if (!file || magic != KERNEL_CACHE_MAGIC
               || cache_version != KERNEL_CACHE_FORMAT_VERSION
-              || formula_version != kernelFormulaVersion(projector_kernel)
+              || formula_version != kernelFormulaVersion(projector_kernel, L)
               || stored_L != static_cast<std::uint32_t>(L)
               || stored_mode != expected_mode) {
         std::cout << "Kernel cache " << filename
@@ -371,15 +373,18 @@ double TensorialModel::siteRate(int site) {
 }
 
 // Stress drop of a plastic event. The yielding plane has normal
-// e = [sin θ, -cos θ]; the drop is taken along that normal, with the single
-// sign of σ·e, so that the distance to yield after the event is exactly z.
+// e = [sin θ, -cos θ]; the aligned rule is the tensorial counterpart of
+// the scalar reset in Appendix A. Before the mean-stress projection, it sends
+// sigma.e to sgn(sigma.e) * (sigma_Y - z). Thus z measures inward from the
+// selected yield plane; once z crosses the midpoint it is not the minimum
+// distance to either of the two planes.
 void TensorialModel::computeStressDrop(int site, double x, double z,
                                        double& delta_sigma_xx,
                                        double& delta_sigma_xy) const {
     if (drop_rule == DropRule::PaperSigned) {
-        // The paper's drop direction, but never pointing outwards. The drop is
-        // still not (z - x) along the yield normal, so the distance to yield
-        // after the event is not z -- that is what the direction costs.
+        // Orient the projection of the paper's component-wise direction by the
+        // signed yield coordinate. Its projected amplitude is still attenuated
+        // relative to (z - x), and the signed amplitude can reverse when z < x.
         double sgn_xx = (sigma_xx[site] >= 0.0) ? 1.0 : -1.0;
         double sgn_xy = (sigma_xy[site] >= 0.0) ? 1.0 : -1.0;
 
@@ -432,13 +437,21 @@ void TensorialModel::calculateEshelbyKernels() {
     std::vector<std::vector<std::complex<double>>> G_xy_xy_q(L, std::vector<std::complex<double>>(L));
     std::vector<std::vector<std::complex<double>>> G_xx_xy_q(L, std::vector<std::complex<double>>(L));
 
-    // Calculate kernels in Fourier space
-    // Note: (mx, my) are storage indices in [0, L); (nx, ny) are the physical
-    // wavevector integers in [-L/2+1, L/2] and must never be used as indices.
+    // Calculate kernels in Fourier space. The paper kernel is periodic in each
+    // integer wavevector, so retain its historical representatives exactly.
+    // The diagnostic projector uses signed square roots sin(pi*n/L), which are
+    // anti-periodic under n -> n + L. On odd lattices its representatives must
+    // therefore be inversion-symmetric; otherwise the mixed mode is not
+    // Hermitian and discarding the imaginary inverse transform changes it into
+    // a non-projector. Even lattices retain one self-conjugate Nyquist endpoint.
+    const int wavevector_shift = (projector_kernel && L % 2 != 0) ? 0 : 1;
+    const auto wavevector = [this, wavevector_shift](int storage_index) {
+        return storage_index - L / 2 + wavevector_shift;
+    };
     for (int mx = 0; mx < L; mx++) {
-        int nx = mx - L/2 + 1;
+        int nx = wavevector(mx);
         for (int my = 0; my < L; my++) {
-            int ny = my - L/2 + 1;
+            int ny = wavevector(my);
             // Skip q = 0 (set to 0 as per Eq. 17)
             if (nx == 0 && ny == 0) {
                 G_xx_xx_q[mx][my] = 0.0;
@@ -493,8 +506,8 @@ void TensorialModel::calculateEshelbyKernels() {
 
             for (int mx = 0; mx < L; mx++) {
                 for (int my = 0; my < L; my++) {
-                    int nx = mx - L/2 + 1;
-                    int ny = my - L/2 + 1;
+                    int nx = wavevector(mx);
+                    int ny = wavevector(my);
                     double phase = 2.0 * M_PI * (nx * x + ny * y) / L;
                     std::complex<double> exp_factor(cos(phase), sin(phase));
 
@@ -628,12 +641,12 @@ bool TensorialModel::loadConfiguration(const std::string& filename) {
     return true;
 }
 
-void TensorialModel::saveConfiguration(const std::string& filename) {
+bool TensorialModel::saveConfiguration(const std::string& filename) {
     std::ofstream file(filename);
 
     if (!file.is_open()) {
         std::cerr << "Error: Could not open file " << filename << " for writing." << std::endl;
-        return;
+        return false;
     }
 
     const char* drop_name = (drop_rule == DropRule::Paper) ? "paper"
@@ -657,16 +670,21 @@ void TensorialModel::saveConfiguration(const std::string& filename) {
     }
 
     file.close();
+    if (!file) {
+        std::cerr << "Error: Failed while writing " << filename << "." << std::endl;
+        return false;
+    }
     std::cout << "Configuration saved to " << filename << std::endl;
+    return true;
 }
 
 // Save simulation statistics to file
-void TensorialModel::saveStatistics(const std::string& filename) {
+bool TensorialModel::saveStatistics(const std::string& filename) {
     std::ofstream file(filename);
 
     if (!file.is_open()) {
         std::cerr << "Error: Could not open file " << filename << " for writing." << std::endl;
-        return;
+        return false;
     }
 
     // Calculate various statistics
@@ -707,7 +725,12 @@ void TensorialModel::saveStatistics(const std::string& filename) {
     file << "# Variance sigma_xy: " << var_sigma_xy << "\n";
 
     file.close();
+    if (!file) {
+        std::cerr << "Error: Failed while writing " << filename << "." << std::endl;
+        return false;
+    }
     std::cout << "Statistics saved to " << filename << std::endl;
+    return true;
 }
 
 // Measure spatial correlations of stress

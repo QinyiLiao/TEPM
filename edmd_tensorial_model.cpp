@@ -115,12 +115,15 @@ bool EDMDTensorialModel::runEvents(long long int num_events) {
     for (long long int e = 0; e < num_events; e++) {
         step();
 
-        const bool report = (e % report_interval == 0);
-        const bool guard = (e % guard_interval == 0);
+        const long long int completed = e + 1;
+        const bool report = (completed % report_interval == 0)
+                         || completed == num_events;
+        const bool guard = (completed % guard_interval == 0)
+                        || completed == num_events;
         if (report || guard) {
             double rms = stressRms();
             if (report) {
-                std::cout << "Event " << e << "/" << num_events
+                std::cout << "Event " << completed << "/" << num_events
                           << " (t = " << time << ", rms = " << rms << ")" << std::endl;
             }
 
@@ -138,14 +141,14 @@ bool EDMDTensorialModel::runEvents(long long int num_events) {
 }
 
 // Statistics, with the EDMD-specific quantities appended
-void EDMDTensorialModel::saveStatistics(const std::string& filename) {
-    TensorialModel::saveStatistics(filename);
+bool EDMDTensorialModel::saveStatistics(const std::string& filename) {
+    if (!TensorialModel::saveStatistics(filename)) return false;
 
     std::ofstream file(filename, std::ios_base::app);
 
     if (!file.is_open()) {
         std::cerr << "Error: Could not open file " << filename << " for appending." << std::endl;
-        return;
+        return false;
     }
 
     file << "# Algorithm: edmd\n";
@@ -154,5 +157,10 @@ void EDMDTensorialModel::saveStatistics(const std::string& filename) {
     file << "# Simulation time: " << time << "\n";
 
     file.close();
+    if (!file) {
+        std::cerr << "Error: Failed while appending " << filename << "." << std::endl;
+        return false;
+    }
     std::cout << "EDMD statistics appended to " << filename << std::endl;
+    return true;
 }

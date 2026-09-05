@@ -11,6 +11,7 @@ The model simulates a 2D lattice of sites, each with local stress tensors and yi
 - Tensorial stress representation (σxx, σxy) with a randomly oriented yielding plane per site
 - Eshelby kernel for elastic propagation, cached to disk and reused between runs
 - Three drivers: Gillespie (`edmd`), Monte Carlo (`mc`), and extremal dynamics (`extremal`) at T = 0⁺
+- Optional exact rejection skipping makes independent low-temperature MC checks practical without changing its attempted-move clock
 - Persistence correlation function ⟨π(t)⟩ and four-point correlation function χ₄(t), averaged over physical-time origins
 - Avalanche statistics and energy gaps for the T = 0⁺ critical point
 - Selectable stress-drop and kernel conventions, so the published equations and their corrected forms can both be run — see *Implementation notes*
@@ -69,6 +70,7 @@ Conventions — see *Implementation notes*:
 
 Other:
 
+- `-mcskip`: MC only; exactly skip geometrically distributed rejected attempts. `-steps` and time still count every implied attempt; literal rejection remains the default
 - `-loadconfig <file>`: start from a saved configuration instead of a random state. The file must describe the same lattice size; its own temperature and drop rule are not applied, so set those explicitly
 - `-h`, `--help`: full option list
 
@@ -96,7 +98,7 @@ Filenames carry the lattice size, temperature and any `-tag` suffix. Headers rec
 
 - `tensorial_model.h/cpp`: base class — lattice, Eshelby kernel, stress drops, persistence, the physical-time estimators, configuration I/O
 - `edmd_tensorial_model.h/cpp`: Gillespie driver. Continuous time, one plastic event per step, site chosen with probability r_i/Σr
-- `mc_tensorial_model.h/cpp`: Monte Carlo driver. Uniform site choice, acceptance exp(−E/T), time counted in sweeps including rejected attempts
+- `mc_tensorial_model.h/cpp`: Monte Carlo driver. Uniform rejection by default, optional exact rejection skipping, and time counted in sweeps including rejected attempts
 - `extremal_tensorial_model.h/cpp`: extremal dynamics at T = 0⁺ — relax the weakest site, one unit of time per event
 - `main.cpp`: command line, run orchestration, output
 
@@ -120,7 +122,7 @@ Some equations as printed require care. This code makes each choice explicit rat
 
 **Clock construction (`-select`).** The Gillespie step can be built either by drawing a waiting time for every site and taking the earliest (`literal`), or equivalently and more cheaply from the total rate (`rate`, the default). These agree. A third construction sometimes seen — choose the site by rate, then draw the waiting time from that site's own exponential without conditioning — is *not* equivalent: it overestimates the time per event by a factor equal to the number of sites. It is not implemented here.
 
-**Driver agreement.** The Monte Carlo and Gillespie drivers integrate the same master equation by different means, and have been checked against each other on identical kernels: the relaxation time and the four-point function agree. Monte Carlo is a rejection sampler, so its cost per plastic event grows as the acceptance rate exp(−E/T) falls, and at low temperature the Gillespie driver is the practical choice.
+**Driver agreement.** The Monte Carlo and Gillespie drivers integrate the same master equation by different means, and have been checked against each other on identical kernels: the relaxation time and the four-point function agree. Literal Monte Carlo is a rejection sampler, so its cost per plastic event grows as the acceptance rate exp(−E/T) falls. With `-mcskip`, the code draws the geometric number of attempts through the next acceptance and then an accepted site with rate weight; it retains a scheduled event across observation windows, so the discrete attempt counter and sweep clock are unchanged. Gillespie remains the production driver at the lowest temperatures, where the signed 64-bit MC attempt counter is a hard limit.
 
 ## References
 

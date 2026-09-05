@@ -141,10 +141,10 @@ public:
     bool runAvalanches(long long int num_steps, int regular_px_every,
                        double stable_threshold, int num_blocks);
 
-    void saveAvalanches(const std::string& prefix) const;
-    void saveAvalancheBlocks(const std::string& prefix) const;
-    void saveDistributions(const std::string& filename) const;
-    void saveEnergyGaps(const std::string& filename) const;
+    bool saveAvalanches(const std::string& prefix) const;
+    bool saveAvalancheBlocks(const std::string& prefix) const;
+    bool saveDistributions(const std::string& filename) const;
+    bool saveEnergyGaps(const std::string& filename) const;
     bool divergenceDetected() const { return divergence_detected; }
     const std::string& failureStage() const { return failure_stage; }
 };

@@ -342,7 +342,8 @@ void ExtremalTensorialModel::writeRunMetadata(std::ostream& file) const {
 // One file per threshold, holding the two size histograms. Keeping the full
 // histogram rather than just the moments lets the analysis bootstrap
 // S_c = <S^3>/<S^2> and plot P(S) without re-running anything.
-void ExtremalTensorialModel::saveAvalanches(const std::string& prefix) const {
+bool ExtremalTensorialModel::saveAvalanches(const std::string& prefix) const {
+    bool output_ok = true;
     for (const Threshold& t : thresholds) {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "%.4f", t.x0);
@@ -351,6 +352,7 @@ void ExtremalTensorialModel::saveAvalanches(const std::string& prefix) const {
         std::ofstream file(filename);
         if (!file.is_open()) {
             std::cerr << "Error: could not open " << filename << std::endl;
+            output_ok = false;
             continue;
         }
 
@@ -370,11 +372,19 @@ void ExtremalTensorialModel::saveAvalanches(const std::string& prefix) const {
         for (const auto& kv : t.hist_S)       file << "S " << kv.first << " " << kv.second << "\n";
         for (const auto& kv : t.hist_S_tilde) file << "St " << kv.first << " " << kv.second << "\n";
         file.close();
+        if (!file) {
+            std::cerr << "Error: failed while writing " << filename << std::endl;
+            output_ok = false;
+        }
     }
-    std::cout << "Avalanche histograms saved to " << prefix << "_x0*.dat" << std::endl;
+    if (output_ok) {
+        std::cout << "Avalanche histograms saved to " << prefix << "_x0*.dat" << std::endl;
+    }
+    return output_ok;
 }
 
-void ExtremalTensorialModel::saveAvalancheBlocks(const std::string& prefix) const {
+bool ExtremalTensorialModel::saveAvalancheBlocks(const std::string& prefix) const {
+    bool output_ok = true;
     for (const Threshold& t : thresholds) {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "%.4f", t.x0);
@@ -383,6 +393,7 @@ void ExtremalTensorialModel::saveAvalancheBlocks(const std::string& prefix) cons
         std::ofstream file(filename);
         if (!file.is_open()) {
             std::cerr << "Error: could not open " << filename << std::endl;
+            output_ok = false;
             continue;
         }
 
@@ -401,15 +412,22 @@ void ExtremalTensorialModel::saveAvalancheBlocks(const std::string& prefix) cons
                  << moments.sum_St2 << " " << moments.sum_St3 << "\n";
         }
         file.close();
+        if (!file) {
+            std::cerr << "Error: failed while writing " << filename << std::endl;
+            output_ok = false;
+        }
     }
-    std::cout << "Avalanche block moments saved to " << prefix << "_x0*.dat" << std::endl;
+    if (output_ok) {
+        std::cout << "Avalanche block moments saved to " << prefix << "_x0*.dat" << std::endl;
+    }
+    return output_ok;
 }
 
-void ExtremalTensorialModel::saveDistributions(const std::string& filename) const {
+bool ExtremalTensorialModel::saveDistributions(const std::string& filename) const {
     std::ofstream file(filename);
     if (!file.is_open()) {
         std::cerr << "Error: could not open " << filename << std::endl;
-        return;
+        return false;
     }
 
     long long int min_total = 0;
@@ -438,14 +456,19 @@ void ExtremalTensorialModel::saveDistributions(const std::string& filename) cons
         file << x << " " << p_min << " " << p_regular << " " << p_stable << "\n";
     }
     file.close();
+    if (!file) {
+        std::cerr << "Error: failed while writing " << filename << std::endl;
+        return false;
+    }
     std::cout << "Distributions saved to " << filename << std::endl;
+    return true;
 }
 
-void ExtremalTensorialModel::saveEnergyGaps(const std::string& filename) const {
+bool ExtremalTensorialModel::saveEnergyGaps(const std::string& filename) const {
     std::ofstream file(filename);
     if (!file.is_open()) {
         std::cerr << "Error: could not open " << filename << std::endl;
-        return;
+        return false;
     }
 
     writeRunMetadata(file);
@@ -457,5 +480,10 @@ void ExtremalTensorialModel::saveEnergyGaps(const std::string& filename) const {
              << sample.energy_gap << "\n";
     }
     file.close();
+    if (!file) {
+        std::cerr << "Error: failed while writing " << filename << std::endl;
+        return false;
+    }
     std::cout << "Stable-state energy gaps saved to " << filename << std::endl;
+    return true;
 }

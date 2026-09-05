@@ -12,14 +12,14 @@
 
 // Which form of the plastic stress drop to use.
 //   Aligned: the drop is along the yield normal e = (sin th, -cos th) with the
-//            single sign of sigma.e, so the distance to yield after the event
-//            is exactly z. This is the corrected rule, and the default.
+//            single sign of sigma.e. This is the tensorial counterpart of the
+//            scalar reset, the corrected rule, and the default.
 //   Paper:   Eq. (A2)/(A3) of the PRX, verbatim
 //            -- a separate sgn() per component and a leading minus.
 //   PaperSigned: the paper's *direction* (sin th sgn s_xx, cos th sgn s_xy) but
-//            with the overall sign forced so that the event always lowers
-//            |sigma.e|. This separates the two departures documented in
-//            readme.md: it repairs the sign but keeps the direction.
+//            with its projection oriented by the single sign of sigma.e. This
+//            separates the two departures documented in readme.md: it repairs
+//            the overall sign but keeps the component-wise direction.
 enum class DropRule { Aligned, Paper, PaperSigned };
 
 // Base class for the tensorial elastoplastic model
@@ -143,7 +143,7 @@ public:
     // Root-mean-square stress, used to detect a diverging run
     double stressRms() const;
 
-    // Draw a residual stress z from p(z) = exp(-z/z0)/z0
+    // Draw the reset-depth variate z from p(z) = exp(-z/z0)/z0
     double drawResidualStress() { return exp_dist(rng); }
     
     // Replace the randomly drawn initial state with one read back from a file
@@ -180,8 +180,9 @@ public:
                    std::vector<double>& px);
 
     // Measurement and analysis
-    void saveConfiguration(const std::string& filename);
-    void saveStatistics(const std::string& filename);
+    // Return false if the requested scientific output cannot be written.
+    bool saveConfiguration(const std::string& filename);
+    bool saveStatistics(const std::string& filename);
     virtual void measureCorrelations();
     
     // Getters and setters

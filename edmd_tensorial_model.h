@@ -50,7 +50,7 @@ public:
     // measureDynamics(), measurePx() and runUntil() now live on TensorialModel:
     // they need only stepUntil(), so both drivers share one implementation.
 
-    void saveStatistics(const std::string& filename);
+    bool saveStatistics(const std::string& filename);
 };
 
 #endif // EDMD_TENSORIAL_MODEL_H

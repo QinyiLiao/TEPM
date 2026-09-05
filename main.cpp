@@ -13,6 +13,7 @@
 #include <limits>
 #include <random>
 #include <set>
+#include <stdexcept>
 #include <string>
 
 namespace {
@@ -58,6 +59,72 @@ std::string thresholdFilenameKey(double x0) {
     return out.str();
 }
 
+const char* requireOptionValue(int& index, int argc, char** argv,
+                               const std::string& option) {
+    if (index + 1 >= argc) {
+        throw std::invalid_argument(option + " requires a value");
+    }
+    return argv[++index];
+}
+
+long long int parseLongLong(const std::string& text,
+                            const std::string& option) {
+    std::size_t used = 0;
+    const long long int value = std::stoll(text, &used);
+    if (used != text.size()) {
+        throw std::invalid_argument(option + " has an invalid integer: " + text);
+    }
+    return value;
+}
+
+int parseInt(const std::string& text, const std::string& option) {
+    const long long int value = parseLongLong(text, option);
+    if (value < std::numeric_limits<int>::min()
+        || value > std::numeric_limits<int>::max()) {
+        throw std::out_of_range(option + " is outside the supported integer range");
+    }
+    return static_cast<int>(value);
+}
+
+double parseDouble(const std::string& text, const std::string& option) {
+    std::size_t used = 0;
+    const double value = std::stod(text, &used);
+    if (used != text.size()) {
+        throw std::invalid_argument(option + " has an invalid number: " + text);
+    }
+    return value;
+}
+
+std::uint32_t parseSeed(const std::string& text) {
+    if (!text.empty() && text.front() == '-') {
+        throw std::invalid_argument("-seed must be an unsigned 32-bit integer");
+    }
+    std::size_t used = 0;
+    const unsigned long long value = std::stoull(text, &used);
+    if (used != text.size()
+        || value > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::invalid_argument("-seed must be an unsigned 32-bit integer");
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+bool finishOutput(std::ofstream& file, const std::string& filename) {
+    file.close();
+    if (!file) {
+        std::cerr << "Error: Failed while writing " << filename << ".\n";
+        return false;
+    }
+    return true;
+}
+
+template <class Model>
+bool saveCoreOutputs(Model& model, const std::string& config_file,
+                     const std::string& stats_file) {
+    const bool config_ok = model.saveConfiguration(config_file);
+    const bool stats_ok = model.saveStatistics(stats_file);
+    return config_ok && stats_ok;
+}
+
 }  // namespace
 
 
@@ -79,7 +146,7 @@ static int runPaperAnalysis(Model& model,
                             const char* algorithm,
                             int L, double T, std::uint32_t random_seed,
                             bool projector_kernel, DropRule drop_rule,
-                            bool literal_select, double kernel_amplitude,
+                            const char* selection, double kernel_amplitude,
                             long long int steps, int analyze_origins,
                             double analysis_center, int px_samples,
                             bool measure_tau,
@@ -108,26 +175,38 @@ static int runPaperAnalysis(Model& model,
     if (analyze_origins > 0 && tau <= 0.0) {
         std::cerr << "Paper-style analysis failed because the pilot "
                   << "half-time was not reached.\n";
+        bool output_ok = true;
         std::ofstream df(dyn_file, std::ios::trunc);
-        df << "# algorithm " << algorithm << "\n"
-           << "# L " << L << "\n"
-           << "# T " << T << "\n"
-           << "# seed " << random_seed << "\n"
-           << "# analysis_scale_method adaptive_physical_time_v1\n"
-           << "# analysis_failure pilot_half_time_not_reached\n"
-           << "# production_bracketed 0\n"
-           << "# tau_alpha_timeavg -1\n";
+        if (!df.is_open()) {
+            std::cerr << "Error: Could not open " << dyn_file << " for writing.\n";
+            output_ok = false;
+        } else {
+            df << "# algorithm " << algorithm << "\n"
+               << "# L " << L << "\n"
+               << "# T " << T << "\n"
+               << "# seed " << random_seed << "\n"
+               << "# analysis_scale_method adaptive_physical_time_v1\n"
+               << "# analysis_failure pilot_half_time_not_reached\n"
+               << "# production_bracketed 0\n"
+               << "# tau_alpha_timeavg -1\n";
+            output_ok = finishOutput(df, dyn_file) && output_ok;
+        }
         std::ofstream of(origins_file, std::ios::trunc);
-        of << "# algorithm " << algorithm << "\n"
-           << "# L " << L << "\n"
-           << "# T " << T << "\n"
-           << "# seed " << random_seed << "\n"
-           << "# analysis_scale_method adaptive_physical_time_v1\n"
-           << "# analysis_failure pilot_half_time_not_reached\n"
-           << "# production_bracketed 0\n";
-        model.saveConfiguration(config_file);
-        model.saveStatistics(stats_file);
-        return 3;
+        if (!of.is_open()) {
+            std::cerr << "Error: Could not open " << origins_file << " for writing.\n";
+            output_ok = false;
+        } else {
+            of << "# algorithm " << algorithm << "\n"
+               << "# L " << L << "\n"
+               << "# T " << T << "\n"
+               << "# seed " << random_seed << "\n"
+               << "# analysis_scale_method adaptive_physical_time_v1\n"
+               << "# analysis_failure pilot_half_time_not_reached\n"
+               << "# production_bracketed 0\n";
+            output_ok = finishOutput(of, origins_file) && output_ok;
+        }
+        output_ok = saveCoreOutputs(model, config_file, stats_file) && output_ok;
+        return output_ok ? 3 : 4;
     }
 
     if (analyze_origins > 0 && tau > 0.0) {
@@ -178,35 +257,47 @@ static int runPaperAnalysis(Model& model,
                       << commaSeparated(preliminary_centers)
                       << ", endpoint_pi="
                       << commaSeparated(preliminary_endpoint_pi) << "\n";
+            bool output_ok = true;
             std::ofstream df(dyn_file, std::ios::trunc);
-            df << "# algorithm " << algorithm << "\n"
-               << "# L " << L << "\n"
-               << "# T " << T << "\n"
-               << "# seed " << random_seed << "\n"
-               << "# analysis_scale_method adaptive_physical_time_v1\n"
-               << "# analysis_failure preliminary_scale_unbracketed\n"
-               << "# pilot_half_time " << tau << "\n"
-               << "# preliminary_physical_time_origins "
-               << preliminary_origins << "\n"
-               << "# preliminary_attempts "
-               << preliminary_centers.size() << "\n"
-               << "# preliminary_centers "
-               << commaSeparated(preliminary_centers) << "\n"
-               << "# preliminary_endpoint_pi "
-               << commaSeparated(preliminary_endpoint_pi) << "\n"
-               << "# production_bracketed 0\n"
-               << "# tau_alpha_timeavg -1\n";
+            if (!df.is_open()) {
+                std::cerr << "Error: Could not open " << dyn_file << " for writing.\n";
+                output_ok = false;
+            } else {
+                df << "# algorithm " << algorithm << "\n"
+                   << "# L " << L << "\n"
+                   << "# T " << T << "\n"
+                   << "# seed " << random_seed << "\n"
+                   << "# analysis_scale_method adaptive_physical_time_v1\n"
+                   << "# analysis_failure preliminary_scale_unbracketed\n"
+                   << "# pilot_half_time " << tau << "\n"
+                   << "# preliminary_physical_time_origins "
+                   << preliminary_origins << "\n"
+                   << "# preliminary_attempts "
+                   << preliminary_centers.size() << "\n"
+                   << "# preliminary_centers "
+                   << commaSeparated(preliminary_centers) << "\n"
+                   << "# preliminary_endpoint_pi "
+                   << commaSeparated(preliminary_endpoint_pi) << "\n"
+                   << "# production_bracketed 0\n"
+                   << "# tau_alpha_timeavg -1\n";
+                output_ok = finishOutput(df, dyn_file) && output_ok;
+            }
             std::ofstream of(origins_file, std::ios::trunc);
-            of << "# algorithm " << algorithm << "\n"
-               << "# L " << L << "\n"
-               << "# T " << T << "\n"
-               << "# seed " << random_seed << "\n"
-               << "# analysis_scale_method adaptive_physical_time_v1\n"
-               << "# analysis_failure preliminary_scale_unbracketed\n"
-               << "# production_bracketed 0\n";
-            model.saveConfiguration(config_file);
-            model.saveStatistics(stats_file);
-            return 3;
+            if (!of.is_open()) {
+                std::cerr << "Error: Could not open " << origins_file << " for writing.\n";
+                output_ok = false;
+            } else {
+                of << "# algorithm " << algorithm << "\n"
+                   << "# L " << L << "\n"
+                   << "# T " << T << "\n"
+                   << "# seed " << random_seed << "\n"
+                   << "# analysis_scale_method adaptive_physical_time_v1\n"
+                   << "# analysis_failure preliminary_scale_unbracketed\n"
+                   << "# production_bracketed 0\n";
+                output_ok = finishOutput(of, origins_file) && output_ok;
+            }
+            output_ok = saveCoreOutputs(model, config_file, stats_file) && output_ok;
+            return output_ok ? 3 : 4;
         }
         std::cout << "preliminary_tau_alpha_timeavg = " << preliminary_tau
                   << std::endl;
@@ -266,91 +357,108 @@ static int runPaperAnalysis(Model& model,
                       << commaSeparated(production_endpoint_pi) << "\n";
         }
 
+        bool output_ok = true;
         std::ofstream df(dyn_file);
-        df << "# algorithm " << algorithm << "\n";
-        df << "# L " << L << "\n";
-        df << "# T " << T << "\n";
-        df << "# seed " << random_seed << "\n";
-        df << "# kernel " << (projector_kernel ? "proj" : "paper") << "\n";
-        df << "# drop " << ((drop_rule == DropRule::Paper) ? "paper"
-                              : (drop_rule == DropRule::PaperSigned) ? "papersgn"
-                                                                     : "aligned") << "\n";
-        df << "# selection " << (literal_select ? "literal" : "rate") << "\n";
-        df << "# kernel_amplitude " << kernel_amplitude << "\n";
-        df << "# equilibration_events " << steps << "\n";
-        df << "# analysis_scale_method adaptive_physical_time_v1\n";
-        df << "# production_center_override " << analysis_center << "\n";
-        df << "# physical_time_origins " << analyze_origins << "\n";
-        df << "# origin_spacing " << origin_spacing << "\n";
-        df << "# pilot_half_time " << tau << "\n";
-        df << "# preliminary_physical_time_origins " << preliminary_origins << "\n";
-        df << "# preliminary_attempts " << preliminary_centers.size() << "\n";
-        df << "# preliminary_centers "
-           << commaSeparated(preliminary_centers) << "\n";
-        df << "# preliminary_endpoint_pi "
-           << commaSeparated(preliminary_endpoint_pi) << "\n";
-        df << "# preliminary_tau_alpha_timeavg " << preliminary_tau << "\n";
-        df << "# production_attempts " << production_centers.size() << "\n";
-        df << "# production_centers "
-           << commaSeparated(production_centers) << "\n";
-        df << "# production_endpoint_pi "
-           << commaSeparated(production_endpoint_pi) << "\n";
-        df << "# discarded_production_origins "
-           << analyze_origins * (production_centers.size() - 1) << "\n";
-        df << "# production_bracketed " << (production_bracketed ? 1 : 0)
-           << "\n";
-        df << "# tau_alpha_timeavg " << tau_timeavg << "\n";
-        df << "# t  pi(t)  chi4(t)\n";
-        for (int k = 0; k < num_times; k++) {
-            df << times[k] << " " << pi_mean[k] << " " << chi4[k] << "\n";
-        }
-        df.close();
-        std::cout << "Dynamics saved to " << dyn_file << std::endl;
-
-        std::ofstream of(origins_file);
-        of << "# algorithm " << algorithm << "\n";
-        of << "# L " << L << "\n";
-        of << "# T " << T << "\n";
-        of << "# seed " << random_seed << "\n";
-        of << "# kernel " << (projector_kernel ? "proj" : "paper") << "\n";
-        of << "# drop " << ((drop_rule == DropRule::Paper) ? "paper"
-                              : (drop_rule == DropRule::PaperSigned) ? "papersgn"
-                                                                     : "aligned") << "\n";
-        of << "# selection " << (literal_select ? "literal" : "rate") << "\n";
-        of << "# kernel_amplitude " << kernel_amplitude << "\n";
-        of << "# equilibration_events " << steps << "\n";
-        of << "# analysis_scale_method adaptive_physical_time_v1\n";
-        of << "# production_center_override " << analysis_center << "\n";
-        of << "# physical_time_origins " << analyze_origins << "\n";
-        of << "# origin_spacing " << origin_spacing << "\n";
-        of << "# pilot_half_time " << tau << "\n";
-        of << "# preliminary_physical_time_origins "
-           << preliminary_origins << "\n";
-        of << "# preliminary_attempts " << preliminary_centers.size() << "\n";
-        of << "# preliminary_centers "
-           << commaSeparated(preliminary_centers) << "\n";
-        of << "# preliminary_endpoint_pi "
-           << commaSeparated(preliminary_endpoint_pi) << "\n";
-        of << "# preliminary_tau_alpha_timeavg " << preliminary_tau << "\n";
-        of << "# production_attempts " << production_centers.size() << "\n";
-        of << "# production_centers "
-           << commaSeparated(production_centers) << "\n";
-        of << "# production_endpoint_pi "
-           << commaSeparated(production_endpoint_pi) << "\n";
-        of << "# discarded_production_origins "
-           << analyze_origins * (production_centers.size() - 1) << "\n";
-        of << "# production_bracketed " << (production_bracketed ? 1 : 0)
-           << "\n";
-        of << "# tau_alpha_timeavg " << tau_timeavg << "\n";
-        of << "# columns origin_index t pi(t)\n";
-        for (int origin = 0; origin < analyze_origins; origin++) {
+        if (!df.is_open()) {
+            std::cerr << "Error: Could not open " << dyn_file << " for writing.\n";
+            output_ok = false;
+        } else {
+            df << "# algorithm " << algorithm << "\n";
+            df << "# L " << L << "\n";
+            df << "# T " << T << "\n";
+            df << "# seed " << random_seed << "\n";
+            df << "# kernel " << (projector_kernel ? "proj" : "paper") << "\n";
+            df << "# drop " << ((drop_rule == DropRule::Paper) ? "paper"
+                                  : (drop_rule == DropRule::PaperSigned) ? "papersgn"
+                                                                         : "aligned") << "\n";
+            df << "# selection " << selection << "\n";
+            df << "# kernel_amplitude " << kernel_amplitude << "\n";
+            df << "# equilibration_events " << steps << "\n";
+            df << "# analysis_scale_method adaptive_physical_time_v1\n";
+            df << "# production_center_override " << analysis_center << "\n";
+            df << "# physical_time_origins " << analyze_origins << "\n";
+            df << "# origin_spacing " << origin_spacing << "\n";
+            df << "# pilot_half_time " << tau << "\n";
+            df << "# preliminary_physical_time_origins " << preliminary_origins << "\n";
+            df << "# preliminary_attempts " << preliminary_centers.size() << "\n";
+            df << "# preliminary_centers "
+               << commaSeparated(preliminary_centers) << "\n";
+            df << "# preliminary_endpoint_pi "
+               << commaSeparated(preliminary_endpoint_pi) << "\n";
+            df << "# preliminary_tau_alpha_timeavg " << preliminary_tau << "\n";
+            df << "# production_attempts " << production_centers.size() << "\n";
+            df << "# production_centers "
+               << commaSeparated(production_centers) << "\n";
+            df << "# production_endpoint_pi "
+               << commaSeparated(production_endpoint_pi) << "\n";
+            df << "# discarded_production_origins "
+               << analyze_origins * (production_centers.size() - 1) << "\n";
+            df << "# production_bracketed " << (production_bracketed ? 1 : 0)
+               << "\n";
+            df << "# tau_alpha_timeavg " << tau_timeavg << "\n";
+            df << "# t  pi(t)  chi4(t)\n";
             for (int k = 0; k < num_times; k++) {
-                of << origin << " " << times[k] << " "
-                   << pi_by_origin[origin][k] << "\n";
+                df << times[k] << " " << pi_mean[k] << " " << chi4[k] << "\n";
+            }
+            if (finishOutput(df, dyn_file)) {
+                std::cout << "Dynamics saved to " << dyn_file << std::endl;
+            } else {
+                output_ok = false;
             }
         }
-        of.close();
-        std::cout << "Per-origin persistence saved to " << origins_file << std::endl;
+
+        std::ofstream of(origins_file);
+        if (!of.is_open()) {
+            std::cerr << "Error: Could not open " << origins_file << " for writing.\n";
+            output_ok = false;
+        } else {
+            of << "# algorithm " << algorithm << "\n";
+            of << "# L " << L << "\n";
+            of << "# T " << T << "\n";
+            of << "# seed " << random_seed << "\n";
+            of << "# kernel " << (projector_kernel ? "proj" : "paper") << "\n";
+            of << "# drop " << ((drop_rule == DropRule::Paper) ? "paper"
+                                  : (drop_rule == DropRule::PaperSigned) ? "papersgn"
+                                                                         : "aligned") << "\n";
+            of << "# selection " << selection << "\n";
+            of << "# kernel_amplitude " << kernel_amplitude << "\n";
+            of << "# equilibration_events " << steps << "\n";
+            of << "# analysis_scale_method adaptive_physical_time_v1\n";
+            of << "# production_center_override " << analysis_center << "\n";
+            of << "# physical_time_origins " << analyze_origins << "\n";
+            of << "# origin_spacing " << origin_spacing << "\n";
+            of << "# pilot_half_time " << tau << "\n";
+            of << "# preliminary_physical_time_origins "
+               << preliminary_origins << "\n";
+            of << "# preliminary_attempts " << preliminary_centers.size() << "\n";
+            of << "# preliminary_centers "
+               << commaSeparated(preliminary_centers) << "\n";
+            of << "# preliminary_endpoint_pi "
+               << commaSeparated(preliminary_endpoint_pi) << "\n";
+            of << "# preliminary_tau_alpha_timeavg " << preliminary_tau << "\n";
+            of << "# production_attempts " << production_centers.size() << "\n";
+            of << "# production_centers "
+               << commaSeparated(production_centers) << "\n";
+            of << "# production_endpoint_pi "
+               << commaSeparated(production_endpoint_pi) << "\n";
+            of << "# discarded_production_origins "
+               << analyze_origins * (production_centers.size() - 1) << "\n";
+            of << "# production_bracketed " << (production_bracketed ? 1 : 0)
+               << "\n";
+            of << "# tau_alpha_timeavg " << tau_timeavg << "\n";
+            of << "# columns origin_index t pi(t)\n";
+            for (int origin = 0; origin < analyze_origins; origin++) {
+                for (int k = 0; k < num_times; k++) {
+                    of << origin << " " << times[k] << " "
+                       << pi_by_origin[origin][k] << "\n";
+                }
+            }
+            if (finishOutput(of, origins_file)) {
+                std::cout << "Per-origin persistence saved to " << origins_file << std::endl;
+            } else {
+                output_ok = false;
+            }
+        }
 
         if (px_samples > 0 && production_bracketed) {
             std::cout << "Measuring P(x)..." << std::endl;
@@ -361,25 +469,33 @@ static int runPaperAnalysis(Model& model,
 
             std::string px_file = "px" + suffix + ".dat";
             std::ofstream pf(px_file);
-            pf << "# algorithm " << algorithm << "\n";
-            pf << "# L " << L << "\n";
-            pf << "# T " << T << "\n";
-            pf << "# seed " << random_seed << "\n";
-            pf << "# kernel " << (projector_kernel ? "proj" : "paper") << "\n";
-            pf << "# drop " << ((drop_rule == DropRule::Paper) ? "paper"
-                                  : (drop_rule == DropRule::PaperSigned) ? "papersgn"
-                                                                         : "aligned") << "\n";
-            pf << "# selection " << (literal_select ? "literal" : "rate") << "\n";
-            pf << "# kernel_amplitude " << kernel_amplitude << "\n";
-            pf << "# equilibration_events " << steps << "\n";
-            pf << "# physical_time_samples " << px_samples << "\n";
-            pf << "# sample_interval " << px_interval << "\n";
-            pf << "# x  P(x)\n";
-            for (size_t b = 0; b < px.size(); b++) {
-                pf << (b + 0.5) / px.size() << " " << px[b] << "\n";
+            if (!pf.is_open()) {
+                std::cerr << "Error: Could not open " << px_file << " for writing.\n";
+                output_ok = false;
+            } else {
+                pf << "# algorithm " << algorithm << "\n";
+                pf << "# L " << L << "\n";
+                pf << "# T " << T << "\n";
+                pf << "# seed " << random_seed << "\n";
+                pf << "# kernel " << (projector_kernel ? "proj" : "paper") << "\n";
+                pf << "# drop " << ((drop_rule == DropRule::Paper) ? "paper"
+                                      : (drop_rule == DropRule::PaperSigned) ? "papersgn"
+                                                                             : "aligned") << "\n";
+                pf << "# selection " << selection << "\n";
+                pf << "# kernel_amplitude " << kernel_amplitude << "\n";
+                pf << "# equilibration_events " << steps << "\n";
+                pf << "# physical_time_samples " << px_samples << "\n";
+                pf << "# sample_interval " << px_interval << "\n";
+                pf << "# x  P(x)\n";
+                for (size_t b = 0; b < px.size(); b++) {
+                    pf << (b + 0.5) / px.size() << " " << px[b] << "\n";
+                }
+                if (finishOutput(pf, px_file)) {
+                    std::cout << "P(x) saved to " << px_file << std::endl;
+                } else {
+                    output_ok = false;
+                }
             }
-            pf.close();
-            std::cout << "P(x) saved to " << px_file << std::endl;
         } else if (px_samples == 0) {
             std::cout << "P(x) sampling skipped (-pxsamples 0)." << std::endl;
         } else {
@@ -387,9 +503,9 @@ static int runPaperAnalysis(Model& model,
                       << "bracketed." << std::endl;
         }
 
-        if (!production_bracketed) {
-            model.saveConfiguration(config_file);
-            model.saveStatistics(stats_file);
+        if (!production_bracketed || !output_ok) {
+            output_ok = saveCoreOutputs(model, config_file, stats_file) && output_ok;
+            if (!output_ok) return 4;
             return 3;
         }
     }
@@ -411,6 +527,7 @@ int main(int argc, char** argv) {
     bool projector_kernel = false;     // Lattice q_x q_y convention, see readme.md
     DropRule drop_rule = DropRule::Aligned;   // Stress drop convention
     bool literal_select = false;       // Correct independent exponential clocks
+    bool mc_skip = false;              // Exact geometric skipping of MC rejects
     std::string tag;                   // Suffix for the output filenames
     double kernel_amplitude = 1.0;     // Diagnostic scale on the off-site kernel
     std::string load_config;           // Initial state read back from a config file
@@ -420,130 +537,138 @@ int main(int argc, char** argv) {
     int avalanche_blocks = 100;        // Completion-time blocks for uncertainty estimates
     std::uint32_t random_seed = 0;      // RNG seed, generated once if not supplied
     bool seed_supplied = false;
+    bool steps_supplied = false;
+    bool transient_supplied = false;
+    bool analysis_center_supplied = false;
+    bool stable_x0_supplied = false;
 
     // Parse command line arguments
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
+    try {
+        for (int i = 1; i < argc; i++) {
+            const std::string arg = argv[i];
 
-        if (arg == "-L" && i + 1 < argc) {
-            L = std::stoi(argv[++i]);
-        } else if (arg == "-T" && i + 1 < argc) {
-            T = std::stod(argv[++i]);
-        } else if (arg == "-steps" && i + 1 < argc) {
-            steps = std::stoll(argv[++i]);
-        } else if (arg == "-algo" && i + 1 < argc) {
-            algo = argv[++i];
-        } else if (arg == "-tau") {
-            measure_tau = true;
-        } else if (arg == "-taureps" && i + 1 < argc) {
-            tau_reps = std::stoi(argv[++i]);
-        } else if (arg == "-analyze" && i + 1 < argc) {
-            analyze_origins = std::stoi(argv[++i]);
-        } else if (arg == "-pxsamples" && i + 1 < argc) {
-            px_samples = std::stoi(argv[++i]);
-            if (px_samples < 0) {
-                std::cerr << "-pxsamples must be non-negative\n";
-                return 1;
+            if (arg == "-h" || arg == "--help") {
+                std::cout << "Usage: " << argv[0] << " [options]\n"
+                          << "Options:\n"
+                          << "  -L <size>      Integer system size in [2, 46340] (default: 32)\n"
+                          << "  -T <temp>      Finite positive temperature (default: 0.05)\n"
+                          << "  -steps <num>   Positive EDMD equilibration events (default 2000*L*L),\n"
+                          << "                 MC attempts (default 100000), or extremal measurement\n"
+                          << "                 events (default 2000*L*L)\n"
+                          << "  -algo <name>   edmd (Gillespie, default), mc, or extremal (T = 0+)\n"
+                          << "  -kamp <factor> Finite positive off-site kernel scale (diagnostic; default 1)\n"
+                          << "  -x0 <list>     extremal: comma-separated avalanche thresholds\n"
+                          << "  -transient <n> extremal: non-negative steps discarded (default 8000*L*L)\n"
+                          << "  -stablex0 <x> extremal: sample paper-style stable P(x) and energy gaps\n"
+                          << "  -avalblocks <n> extremal: completion-time moment blocks (default 100)\n"
+                          << "  -tau           Diagnostic single-origin half-persistence time\n"
+                          << "  -taureps <n>   Repeat diagnostic post-event half-times\n"
+                          << "  -analyze <n>   Paper-style physical-time <pi(t)>, chi_4(t), P(x)\n"
+                          << "  -pxsamples <n> Physical-time P(x) samples after -analyze (default 2000; 0 skips)\n"
+                          << "  -analysiscenter <t> Initial production time scale (diagnostic)\n"
+                          << "  -kernel <name> paper (Eq. A6 as printed, default) or proj\n"
+                          << "  -drop <name>   aligned (corrected, default), paper (Eq. A2/A3\n"
+                          << "                 verbatim) or papersgn (their direction, sign repaired)\n"
+                          << "  -select <name> EDMD: rate (default) or literal (independent clocks);\n"
+                          << "                 MC defaults to literal uniform rejection sampling\n"
+                          << "  -mcskip        MC: exactly skip geometrically distributed rejected\n"
+                          << "                 attempts; -steps and time still count every attempt\n"
+                          << "  -seed <uint32> RNG seed (generated and printed if omitted)\n"
+                          << "  -loadconfig <file>  Start from a saved configuration instead of a\n"
+                          << "                 random state, e.g. to quench a finite-temperature\n"
+                          << "                 configuration to T=0+ with -algo extremal. The file\n"
+                          << "                 must describe the same L; its own header temperature\n"
+                          << "                 and drop rule are not applied, so set those with -T\n"
+                          << "                 and -drop. Six-digit round-tripping means the state\n"
+                          << "                 is restored to that precision, not exactly.\n"
+                          << "  -tag <name>    Suffix appended to the output filenames\n"
+                          << "  -h, --help     Show this help message\n";
+                return 0;
+            } else if (arg == "-L") {
+                L = parseInt(requireOptionValue(i, argc, argv, arg), arg);
+            } else if (arg == "-T") {
+                T = parseDouble(requireOptionValue(i, argc, argv, arg), arg);
+            } else if (arg == "-steps") {
+                steps = parseLongLong(requireOptionValue(i, argc, argv, arg), arg);
+                steps_supplied = true;
+            } else if (arg == "-algo") {
+                algo = requireOptionValue(i, argc, argv, arg);
+            } else if (arg == "-tau") {
+                measure_tau = true;
+            } else if (arg == "-taureps") {
+                tau_reps = parseInt(requireOptionValue(i, argc, argv, arg), arg);
+            } else if (arg == "-analyze") {
+                analyze_origins = parseInt(requireOptionValue(i, argc, argv, arg), arg);
+            } else if (arg == "-pxsamples") {
+                px_samples = parseInt(requireOptionValue(i, argc, argv, arg), arg);
+            } else if (arg == "-analysiscenter") {
+                analysis_center = parseDouble(requireOptionValue(i, argc, argv, arg), arg);
+                analysis_center_supplied = true;
+            } else if (arg == "-kernel") {
+                const std::string k = requireOptionValue(i, argc, argv, arg);
+                projector_kernel = (k == "proj");
+                if (!projector_kernel && k != "paper") {
+                    throw std::invalid_argument(
+                        "Unknown -kernel " + k + " (use paper or proj)");
+                }
+            } else if (arg == "-drop") {
+                const std::string d = requireOptionValue(i, argc, argv, arg);
+                if (d == "aligned")       drop_rule = DropRule::Aligned;
+                else if (d == "paper")    drop_rule = DropRule::Paper;
+                else if (d == "papersgn") drop_rule = DropRule::PaperSigned;
+                else {
+                    throw std::invalid_argument(
+                        "Unknown -drop " + d + " (use aligned, paper or papersgn)");
+                }
+            } else if (arg == "-select") {
+                const std::string selection =
+                    requireOptionValue(i, argc, argv, arg);
+                literal_select = (selection == "literal");
+                if (!literal_select && selection != "rate") {
+                    throw std::invalid_argument(
+                        "Unknown -select " + selection + " (use rate or literal)");
+                }
+            } else if (arg == "-mcskip") {
+                mc_skip = true;
+            } else if (arg == "-kamp") {
+                kernel_amplitude =
+                    parseDouble(requireOptionValue(i, argc, argv, arg), arg);
+            } else if (arg == "-loadconfig") {
+                load_config = requireOptionValue(i, argc, argv, arg);
+            } else if (arg == "-x0") {
+                x0_list = requireOptionValue(i, argc, argv, arg);
+            } else if (arg == "-transient") {
+                transient =
+                    parseLongLong(requireOptionValue(i, argc, argv, arg), arg);
+                transient_supplied = true;
+            } else if (arg == "-stablex0") {
+                stable_x0 =
+                    parseDouble(requireOptionValue(i, argc, argv, arg), arg);
+                stable_x0_supplied = true;
+            } else if (arg == "-avalblocks") {
+                avalanche_blocks =
+                    parseInt(requireOptionValue(i, argc, argv, arg), arg);
+            } else if (arg == "-tag") {
+                tag = requireOptionValue(i, argc, argv, arg);
+            } else if (arg == "-seed") {
+                random_seed = parseSeed(requireOptionValue(i, argc, argv, arg));
+                seed_supplied = true;
+            } else {
+                throw std::invalid_argument("Unknown option " + arg);
             }
-        } else if (arg == "-analysiscenter" && i + 1 < argc) {
-            analysis_center = std::stod(argv[++i]);
-            if (!std::isfinite(analysis_center) || analysis_center <= 0.0) {
-                std::cerr << "-analysiscenter must be finite and positive\n";
-                return 1;
-            }
-        } else if (arg == "-kernel" && i + 1 < argc) {
-            std::string k = argv[++i];
-            projector_kernel = (k == "proj");
-            if (!projector_kernel && k != "paper") {
-                std::cerr << "Unknown -kernel " << k << " (use paper or proj)\n";
-                return 1;
-            }
-        } else if (arg == "-drop" && i + 1 < argc) {
-            std::string d = argv[++i];
-            if (d == "aligned")          drop_rule = DropRule::Aligned;
-            else if (d == "paper")       drop_rule = DropRule::Paper;
-            else if (d == "papersgn")    drop_rule = DropRule::PaperSigned;
-            else {
-                std::cerr << "Unknown -drop " << d
-                          << " (use aligned, paper or papersgn)\n";
-                return 1;
-            }
-        } else if (arg == "-select" && i + 1 < argc) {
-            std::string sel = argv[++i];
-            literal_select = (sel == "literal");
-            if (!literal_select && sel != "rate") {
-                std::cerr << "Unknown -select " << sel << " (use rate or literal)\n";
-                return 1;
-            }
-        } else if (arg == "-kamp" && i + 1 < argc) {
-            kernel_amplitude = std::stod(argv[++i]);
-        } else if (arg == "-loadconfig" && i + 1 < argc) {
-            load_config = argv[++i];
-        } else if (arg == "-x0" && i + 1 < argc) {
-            x0_list = argv[++i];
-        } else if (arg == "-transient" && i + 1 < argc) {
-            transient = std::stoll(argv[++i]);
-        } else if (arg == "-stablex0" && i + 1 < argc) {
-            stable_x0 = std::stod(argv[++i]);
-            if (!std::isfinite(stable_x0) || stable_x0 < 0.0 || stable_x0 > 1.0) {
-                std::cerr << "-stablex0 must be finite and in [0, 1]\n";
-                return 1;
-            }
-        } else if (arg == "-avalblocks" && i + 1 < argc) {
-            avalanche_blocks = std::stoi(argv[++i]);
-            if (avalanche_blocks <= 0 || avalanche_blocks > 10000) {
-                std::cerr << "-avalblocks must be in [1, 10000]\n";
-                return 1;
-            }
-        } else if (arg == "-tag" && i + 1 < argc) {
-            tag = argv[++i];
-        } else if (arg == "-seed" && i + 1 < argc) {
-            unsigned long long parsed_seed = std::stoull(argv[++i]);
-            if (parsed_seed > std::numeric_limits<std::uint32_t>::max()) {
-                std::cerr << "Seed must be in [0, "
-                          << std::numeric_limits<std::uint32_t>::max() << "]\n";
-                return 1;
-            }
-            random_seed = static_cast<std::uint32_t>(parsed_seed);
-            seed_supplied = true;
-        } else if (arg == "-h" || arg == "--help") {
-            std::cout << "Usage: " << argv[0] << " [options]\n"
-                      << "Options:\n"
-                      << "  -L <size>      System size (default: 32)\n"
-                      << "  -T <temp>      Temperature (default: 0.05)\n"
-                      << "  -steps <num>   EDMD equilibration events (default 2000*L*L), MC steps,\n"
-                      << "                 or extremal measurement steps (default 2000*L*L)\n"
-                      << "  -algo <name>   edmd (Gillespie, default), mc, or extremal (T = 0+)\n"
-                      << "  -kamp <factor> Scale the off-site kernel (diagnostic; default 1)\n"
-                      << "  -x0 <list>     extremal: comma-separated avalanche thresholds\n"
-                      << "  -transient <n> extremal: steps discarded before measuring (default 8000*L*L)\n"
-                      << "  -stablex0 <x> extremal: sample paper-style stable P(x) and energy gaps\n"
-                      << "  -avalblocks <n> extremal: completion-time moment blocks (default 100)\n"
-                      << "  -tau           Diagnostic single-origin half-persistence time\n"
-                      << "  -taureps <n>   Repeat diagnostic post-event half-times\n"
-                      << "  -analyze <n>   Paper-style physical-time <pi(t)>, chi_4(t), P(x)\n"
-                      << "  -pxsamples <n> Physical-time P(x) samples after -analyze (default 2000; 0 skips)\n"
-                      << "  -analysiscenter <t> Initial production time scale (diagnostic)\n"
-                      << "  -kernel <name> paper (Eq. A6 as printed, default) or proj\n"
-                      << "  -drop <name>   aligned (corrected, default), paper (Eq. A2/A3\n"
-                      << "                 verbatim) or papersgn (their direction, sign repaired)\n"
-                      << "  -select <name> rate (default) or literal (independent clocks)\n"
-                      << "  -seed <uint32> RNG seed (generated and printed if omitted)\n"
-                      << "  -loadconfig <file>  Start from a saved configuration instead of a\n"
-                      << "                 random state, e.g. to quench a finite-temperature\n"
-                      << "                 configuration to T=0+ with -algo extremal. The file\n"
-                      << "                 must describe the same L; its own header temperature\n"
-                      << "                 and drop rule are not applied, so set those with -T\n"
-                      << "                 and -drop. Six-digit round-tripping means the state\n"
-                      << "                 is restored to that precision, not exactly.\n"
-                      << "  -tag <name>    Suffix appended to the output filenames\n"
-                      << "  -h, --help     Show this help message\n";
-            return 0;
         }
+    } catch (const std::exception& error) {
+        std::cerr << "Invalid command line: " << error.what() << "\n"
+                  << "Use -h for usage.\n";
+        return 1;
     }
 
     if (algo != "edmd" && algo != "mc" && algo != "extremal") {
         std::cerr << "Unknown -algo " << algo << " (use edmd, mc, or extremal)\n";
+        return 1;
+    }
+    if (mc_skip && algo != "mc") {
+        std::cerr << "-mcskip is available only with -algo mc\n";
         return 1;
     }
     // L*L is stored in int throughout the model, and extremal dynamics needs
@@ -552,8 +677,46 @@ int main(int argc, char** argv) {
         std::cerr << "-L must be in [2, 46340]\n";
         return 1;
     }
-    if (transient < -1) {
+    if (!std::isfinite(T) || T <= 0.0) {
+        std::cerr << "-T must be finite and positive\n";
+        return 1;
+    }
+    if (!std::isfinite(kernel_amplitude) || kernel_amplitude <= 0.0) {
+        std::cerr << "-kamp must be finite and positive\n";
+        return 1;
+    }
+    if (steps_supplied && steps <= 0) {
+        std::cerr << "-steps must be positive\n";
+        return 1;
+    }
+    if (transient_supplied && transient < 0) {
         std::cerr << "-transient must be non-negative\n";
+        return 1;
+    }
+    if (tau_reps < 0) {
+        std::cerr << "-taureps must be non-negative\n";
+        return 1;
+    }
+    if (analyze_origins < 0) {
+        std::cerr << "-analyze must be non-negative\n";
+        return 1;
+    }
+    if (px_samples < 0) {
+        std::cerr << "-pxsamples must be non-negative\n";
+        return 1;
+    }
+    if (analysis_center_supplied
+        && (!std::isfinite(analysis_center) || analysis_center <= 0.0)) {
+        std::cerr << "-analysiscenter must be finite and positive\n";
+        return 1;
+    }
+    if (stable_x0_supplied
+        && (!std::isfinite(stable_x0) || stable_x0 < 0.0 || stable_x0 > 1.0)) {
+        std::cerr << "-stablex0 must be finite and in [0, 1]\n";
+        return 1;
+    }
+    if (avalanche_blocks <= 0 || avalanche_blocks > 10000) {
+        std::cerr << "-avalblocks must be in [1, 10000]\n";
         return 1;
     }
 
@@ -562,17 +725,13 @@ int main(int argc, char** argv) {
     // site, and the drift is larger the colder it gets, so too short an
     // equilibration biases the Arrhenius slope upwards. 2000 is comfortably past
     // where it flattens; the MC driver keeps the old fixed default.
-    if (steps < 0) {
+    if (!steps_supplied) {
         if (algo == "mc")            steps = 100000;
         else if (algo == "extremal") steps = 2000LL * L * L;
         else                         steps = 2000LL * L * L;
     }
-    if (algo == "extremal" && steps <= 0) {
-        std::cerr << "Extremal -steps must be positive\n";
-        return 1;
-    }
 
-    if (std::isfinite(stable_x0) && algo != "extremal") {
+    if (stable_x0_supplied && algo != "extremal") {
         std::cerr << "-stablex0 is available only with -algo extremal\n";
         return 1;
     }
@@ -683,20 +842,26 @@ int main(int argc, char** argv) {
         model.setThresholds(x0s);
         model.prepareAvalancheRun(
             steps, extremal_px_every, stable_x0, avalanche_blocks);
+        auto saveExtremalOutputs = [&]() {
+            const bool aval_ok = model.saveAvalanches("aval" + suffix);
+            const bool blocks_ok =
+                model.saveAvalancheBlocks("avalblocks" + suffix);
+            const bool distributions_ok =
+                model.saveDistributions("xdist" + suffix + ".dat");
+            bool gaps_ok = true;
+            if (std::isfinite(stable_x0)) {
+                gaps_ok = model.saveEnergyGaps("egap" + suffix + ".dat");
+            }
+            const bool core_ok =
+                saveCoreOutputs(model, config_file, stats_file);
+            return aval_ok && blocks_ok && distributions_ok && gaps_ok && core_ok;
+        };
         std::cout << "Discarding transient of " << transient << " steps ("
                   << (static_cast<double>(transient) / (L * L)) << " per site)..." << std::endl;
         if (!model.equilibrate(transient)) {
             std::cerr << "Extremal equilibration failed the divergence guard; "
                       << "measurements were skipped.\n";
-            model.saveAvalanches("aval" + suffix);
-            model.saveAvalancheBlocks("avalblocks" + suffix);
-            model.saveDistributions("xdist" + suffix + ".dat");
-            if (std::isfinite(stable_x0)) {
-                model.saveEnergyGaps("egap" + suffix + ".dat");
-            }
-            model.saveConfiguration(config_file);
-            model.saveStatistics(stats_file);
-            return 2;
+            return saveExtremalOutputs() ? 2 : 4;
         }
 
         std::cout << "Accumulating avalanches over " << x0s.size()
@@ -705,14 +870,8 @@ int main(int argc, char** argv) {
             model.runAvalanches(
                 steps, extremal_px_every, stable_x0, avalanche_blocks);
 
-        model.saveAvalanches("aval" + suffix);
-        model.saveAvalancheBlocks("avalblocks" + suffix);
-        model.saveDistributions("xdist" + suffix + ".dat");
-        if (std::isfinite(stable_x0)) {
-            model.saveEnergyGaps("egap" + suffix + ".dat");
-        }
-        model.saveConfiguration(config_file);
-        model.saveStatistics(stats_file);
+        const bool output_ok = saveExtremalOutputs();
+        if (!output_ok) return 4;
         if (!measurement_ok) {
             if (model.divergenceDetected()) {
                 std::cerr << "Extremal measurement failed the divergence guard; "
@@ -730,6 +889,7 @@ int main(int argc, char** argv) {
         model.setProjectorKernel(projector_kernel);
         model.setDropRule(drop_rule);
         model.setKernelAmplitude(kernel_amplitude);
+        model.setRejectionSkipping(mc_skip);
         std::cout << "Initializing system..." << std::endl;
         model.initialize();
         if (!load_config.empty()) {
@@ -742,7 +902,11 @@ int main(int argc, char** argv) {
         }
 
         std::cout << "Running simulation..." << std::endl;
-        model.runSimulation(steps);
+        if (!model.runSimulation(steps)) {
+            std::cerr << "MC equilibration failed the divergence guard; "
+                      << "measurements were skipped.\n";
+            return saveCoreOutputs(model, config_file, stats_file) ? 2 : 4;
+        }
 
         // tau_alpha in sweeps. The budget has to be in attempts, and the
         // acceptance rate is what makes this expensive at low temperature.
@@ -769,16 +933,24 @@ int main(int argc, char** argv) {
             // fraction of one event at low temperature. It is only a cap: the
             // pilot returns as soon as the persistence halves.
             const double acceptance = model.getAcceptanceRate();
-            const long long int pilot_budget =
-                (acceptance > 0.0)
-                    ? static_cast<long long int>(400.0 * L * L / acceptance)
-                    : steps;
+            long long int pilot_budget = steps;
+            if (acceptance > 0.0) {
+                const long double requested =
+                    400.0L * L * L / static_cast<long double>(acceptance);
+                const long double maximum = static_cast<long double>(
+                    std::numeric_limits<long long int>::max());
+                pilot_budget = (requested >= maximum)
+                    ? std::numeric_limits<long long int>::max()
+                    : static_cast<long long int>(requested);
+            }
             std::cout << "MC pilot budget " << pilot_budget
                       << " attempts (acceptance " << acceptance << ")"
                       << std::endl;
             const int rc = runPaperAnalysis(model, "mc", L, T, random_seed,
                                             projector_kernel, drop_rule,
-                                            literal_select, kernel_amplitude,
+                                            mc_skip ? "geometric_rejection_skip"
+                                                    : "uniform_rejection",
+                                            kernel_amplitude,
                                             steps, analyze_origins,
                                             analysis_center, px_samples,
                                             false, pilot_budget,
@@ -786,8 +958,7 @@ int main(int argc, char** argv) {
             if (rc != 0) return rc;
         }
 
-        model.saveConfiguration(config_file);
-        model.saveStatistics(stats_file);
+        if (!saveCoreOutputs(model, config_file, stats_file)) return 4;
     } else {
         EDMDTensorialModel model(L, T);
         model.setRandomSeed(random_seed);
@@ -811,9 +982,7 @@ int main(int argc, char** argv) {
         if (!model.runEvents(steps)) {
             std::cerr << "EDMD equilibration failed the divergence guard; "
                       << "measurements were skipped.\n";
-            model.saveConfiguration(config_file);
-            model.saveStatistics(stats_file);
-            return 2;
+            return saveCoreOutputs(model, config_file, stats_file) ? 2 : 4;
         }
 
         if (tau_reps > 0) {
@@ -827,7 +996,8 @@ int main(int argc, char** argv) {
         {
             const int rc = runPaperAnalysis(model, "edmd", L, T, random_seed,
                                             projector_kernel, drop_rule,
-                                            literal_select, kernel_amplitude,
+                                            literal_select ? "literal" : "rate",
+                                            kernel_amplitude,
                                             steps, analyze_origins,
                                             analysis_center, px_samples,
                                             measure_tau, 400LL * L * L,
@@ -835,8 +1005,7 @@ int main(int argc, char** argv) {
             if (rc != 0) return rc;
         }
 
-        model.saveConfiguration(config_file);
-        model.saveStatistics(stats_file);
+        if (!saveCoreOutputs(model, config_file, stats_file)) return 4;
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
